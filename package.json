@@ -132,9 +132,9 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "Natively-AI-assistant",
+        "owner": "chandbasha434",
         "repo": "natively-cluely-ai-assistant",
-        "releaseType": "release"
+        "releaseType": "draft"
       }
     ]
   },
