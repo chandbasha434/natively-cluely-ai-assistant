@@ -17,12 +17,34 @@ if (typeof window !== "undefined" && !window.electronAPI) {
     (listeners[event] || []).forEach(cb => { try { cb(...args); } catch (e) { console.error(e); } });
   };
 
+  // ── Shared SSE reader helper ──────────────────────────────────────
+  const readSSEStream = async (resp: Response, parseToken: (line: string) => string | null) => {
+    const reader = resp.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const token = parseToken(line);
+        if (token) emit('onGeminiStreamToken', token);
+      }
+    }
+    emit('onGeminiStreamDone');
+  };
+
   // ── Real Gemini streaming via fetch + SSE ─────────────────────────
   const streamGeminiReal = async (question: string, systemPrompt?: string) => {
-    // Priority: user's own key (localStorage) → baked-in build key (GitHub Secret) → no key
+    // Priority: user's own key (localStorage) → baked-in build key (GitHub Secret)
     const apiKey = LS.get('natively_gemini_key') || (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
+    // Fall back to Groq if no Gemini key
     if (!apiKey) {
-      const msg = '⚠️ No Gemini API key configured. Please go to **Settings → AI Providers** and enter your Gemini API key to get real AI responses. You can get a free key at https://aistudio.google.com/app/apikey';
+      const groqKey = LS.get('natively_groq_key') || (import.meta.env.VITE_GROQ_API_KEY as string) || '';
+      if (groqKey) { await streamGroqReal(question, groqKey, systemPrompt); return; }
+      const msg = '⚠️ No API key configured. Go to **Settings → AI Providers** and add your Gemini or Groq API key.';
       const tokens = msg.split(/(\s+)/);
       let i = 0;
       const iv = setInterval(() => {
@@ -32,7 +54,8 @@ if (typeof window !== "undefined" && !window.electronAPI) {
       return;
     }
 
-    const model = LS.get('natively_current_model') || 'gemini-1.5-flash';
+    const defaultModel = (import.meta.env.VITE_DEFAULT_MODEL as string) || 'gemini-2.5-flash';
+    const model = LS.get('natively_current_model') || defaultModel;
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
 
     const contents: any[] = [];
@@ -48,36 +71,53 @@ if (typeof window !== "undefined" && !window.electronAPI) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents }),
       });
-
       if (!resp.ok) {
         let errText = '';
         try { errText = await resp.text(); } catch {}
-        emit('onGeminiStreamError', `API Error ${resp.status}: ${errText}`);
+        emit('onGeminiStreamError', `Gemini API Error ${resp.status}: ${errText}`);
         return;
       }
+      await readSSEStream(resp, (line) => {
+        if (!line.startsWith('data: ')) return null;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr || jsonStr === '[DONE]') return null;
+        try {
+          const chunk = JSON.parse(jsonStr);
+          return chunk?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        } catch { return null; }
+      });
+    } catch (err: any) {
+      emit('onGeminiStreamError', `Network error: ${err?.message || err}`);
+    }
+  };
 
-      const reader = resp.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const jsonStr = line.slice(6).trim();
-          if (!jsonStr || jsonStr === '[DONE]') continue;
-          try {
-            const chunk = JSON.parse(jsonStr);
-            const token = chunk?.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (token) emit('onGeminiStreamToken', token);
-          } catch {}
-        }
+  // ── Real Groq streaming via fetch + SSE ──────────────────────────
+  const streamGroqReal = async (question: string, apiKey: string, systemPrompt?: string) => {
+    const model = 'llama-3.3-70b-versatile';
+    const messages: any[] = [];
+    if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+    messages.push({ role: 'user', content: question });
+    try {
+      const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model, messages, stream: true }),
+      });
+      if (!resp.ok) {
+        let errText = '';
+        try { errText = await resp.text(); } catch {}
+        emit('onGeminiStreamError', `Groq API Error ${resp.status}: ${errText}`);
+        return;
       }
-      emit('onGeminiStreamDone');
+      await readSSEStream(resp, (line) => {
+        if (!line.startsWith('data: ')) return null;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr || jsonStr === '[DONE]') return null;
+        try {
+          const chunk = JSON.parse(jsonStr);
+          return chunk?.choices?.[0]?.delta?.content || null;
+        } catch { return null; }
+      });
     } catch (err: any) {
       emit('onGeminiStreamError', `Network error: ${err?.message || err}`);
     }
@@ -104,13 +144,13 @@ if (typeof window !== "undefined" && !window.electronAPI) {
           return () => Promise.resolve({
             hasNativelyKey:   false,
             hasGeminiKey:     !!(LS.get('natively_gemini_key') || import.meta.env.VITE_GEMINI_API_KEY),
-            hasGroqKey:       !!LS.get('natively_groq_key'),
+            hasGroqKey:       !!(LS.get('natively_groq_key')   || import.meta.env.VITE_GROQ_API_KEY),
             hasOpenaiKey:     !!LS.get('natively_openai_key'),
             hasClaudeKey:     !!LS.get('natively_claude_key'),
-            hasNvidiaKey:     false,
+            hasNvidiaKey:     !!(import.meta.env.VITE_NVIDIA_API_KEY),
             googleServiceAccountPath: null,
             sttProvider:      "none",
-            hasSttGroqKey:    false,
+            hasSttGroqKey:    !!(LS.get('natively_groq_key') || import.meta.env.VITE_GROQ_API_KEY),
             hasSttOpenaiKey:  false,
             hasDeepgramKey:   false,
             hasElevenLabsKey: false,
@@ -184,12 +224,15 @@ if (typeof window !== "undefined" && !window.electronAPI) {
         }
         if (prop === "getCurrentLlmConfig") {
           return () => {
-            const m = LS.get('natively_current_model') || 'gemini-1.5-flash';
-            return Promise.resolve({ provider: 'gemini', model: m, isOllama: false });
+            const envDefault = (import.meta.env.VITE_DEFAULT_MODEL as string) || 'gemini-2.5-flash';
+            const m = LS.get('natively_current_model') || envDefault;
+            const provider = m.startsWith('gemini') ? 'gemini' : m.startsWith('llama') || m.startsWith('mixtral') ? 'groq' : 'gemini';
+            return Promise.resolve({ provider, model: m, isOllama: false });
           };
         }
         if (prop === "getDefaultModel") {
-          return () => Promise.resolve({ model: LS.get('natively_current_model') || '' });
+          const envDefault = (import.meta.env.VITE_DEFAULT_MODEL as string) || 'gemini-2.5-flash';
+          return () => Promise.resolve({ model: LS.get('natively_current_model') || envDefault });
         }
 
         // ── Theme ─────────────────────────────────────────────────

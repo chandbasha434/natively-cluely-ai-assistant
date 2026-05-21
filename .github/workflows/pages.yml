@@ -37,6 +37,9 @@ jobs:
         run: npm run build
         env:
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
+          VITE_GROQ_API_KEY: ${{ secrets.VITE_GROQ_API_KEY }}
+          VITE_NVIDIA_API_KEY: ${{ secrets.VITE_NVIDIA_API_KEY }}
+          VITE_DEFAULT_MODEL: ${{ secrets.VITE_DEFAULT_MODEL }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
