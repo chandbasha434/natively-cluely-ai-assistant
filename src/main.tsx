@@ -19,7 +19,8 @@ if (typeof window !== "undefined" && !window.electronAPI) {
 
   // ── Real Gemini streaming via fetch + SSE ─────────────────────────
   const streamGeminiReal = async (question: string, systemPrompt?: string) => {
-    const apiKey = LS.get('natively_gemini_key');
+    // Priority: user's own key (localStorage) → baked-in build key (GitHub Secret) → no key
+    const apiKey = LS.get('natively_gemini_key') || (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
     if (!apiKey) {
       const msg = '⚠️ No Gemini API key configured. Please go to **Settings → AI Providers** and enter your Gemini API key to get real AI responses. You can get a free key at https://aistudio.google.com/app/apikey';
       const tokens = msg.split(/(\s+)/);
@@ -102,7 +103,7 @@ if (typeof window !== "undefined" && !window.electronAPI) {
         if (prop === "getStoredCredentials") {
           return () => Promise.resolve({
             hasNativelyKey:   false,
-            hasGeminiKey:     !!LS.get('natively_gemini_key'),
+            hasGeminiKey:     !!(LS.get('natively_gemini_key') || import.meta.env.VITE_GEMINI_API_KEY),
             hasGroqKey:       !!LS.get('natively_groq_key'),
             hasOpenaiKey:     !!LS.get('natively_openai_key'),
             hasClaudeKey:     !!LS.get('natively_claude_key'),
