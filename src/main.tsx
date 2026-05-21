@@ -155,6 +155,9 @@ if (typeof window !== "undefined" && !window.electronAPI) {
         if (prop === "profileGetNotes") {
           return () => Promise.resolve({ success: true, content: "" });
         }
+        if (prop === "profileGetProfile") {
+          return () => Promise.resolve({ identity: {}, skills: [], activeJD: {} });
+        }
         if (prop === "getCustomProviders") {
           return () => Promise.resolve([]);
         }
@@ -172,6 +175,47 @@ if (typeof window !== "undefined" && !window.electronAPI) {
         }
         if (prop === "licenseGetHardwareId") {
           return () => Promise.resolve("web-hardware-id");
+        }
+        if (prop === "getMeetingActive") {
+          return () => Promise.resolve(false);
+        }
+        if (prop === "getUndetectable") {
+          return () => Promise.resolve(false);
+        }
+        if (prop === "getOverlayMousePassthrough") {
+          return () => Promise.resolve(false);
+        }
+        if (prop === "getOpenAtLogin") {
+          return () => Promise.resolve(false);
+        }
+        if (prop === "getVerboseLogging") {
+          return () => Promise.resolve(false);
+        }
+        if (prop === "getDisguise") {
+          return () => Promise.resolve("none");
+        }
+        if (prop === "getLogFilePath") {
+          return () => Promise.resolve(null);
+        }
+        if (prop === "getAvailableOllamaModels") {
+          return () => Promise.resolve([]);
+        }
+        if (prop === "getCurrentLlmConfig") {
+          return () => Promise.resolve({ provider: "gemini", model: "gemini-1.5-flash", isOllama: false });
+        }
+        if (prop === "phoneMirrorGetInfo") {
+          return () => Promise.resolve({
+            running: false,
+            enabled: false,
+            exposeOnLan: false,
+            port: 0,
+            loopbackUrl: null,
+            primaryUrl: null,
+            lanUrls: [],
+            token: null,
+            qrDataUrl: null,
+            clients: 0
+          });
         }
 
         // Generic fallback for any other method
