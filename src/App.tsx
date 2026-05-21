@@ -33,25 +33,47 @@ import ModesSettings from "./components/settings/ModesSettings"
 import { ProfileIntelligenceSettings } from "./components/ProfileIntelligenceSettings"
 
 const queryClient = new QueryClient()
+const Cropper = React.lazy(() => import('./components/Cropper'));
 
 const App: React.FC = () => {
-  const isSettingsWindow = new URLSearchParams(window.location.search).get('window') === 'settings';
-  const isLauncherWindow = new URLSearchParams(window.location.search).get('window') === 'launcher';
-  const isOverlayWindow = new URLSearchParams(window.location.search).get('window') === 'overlay';
-  const isModelSelectorWindow = new URLSearchParams(window.location.search).get('window') === 'model-selector';
-  const isCropperWindow = new URLSearchParams(window.location.search).get('window') === 'cropper';
+  const [windowMode, setWindowModeState] = useState<string>(() => {
+    return new URLSearchParams(window.location.search).get('window') || 'launcher';
+  });
+
+  const isSettingsWindow = windowMode === 'settings';
+  const isLauncherWindow = windowMode === 'launcher';
+  const isOverlayWindow = windowMode === 'overlay';
+  const isModelSelectorWindow = windowMode === 'model-selector';
+  const isCropperWindow = windowMode === 'cropper';
 
   // Default to launcher if not specified (dev mode safety)
   const isDefault = !isSettingsWindow && !isOverlayWindow && !isModelSelectorWindow && !isCropperWindow;
 
-  if (isCropperWindow) {
-    const Cropper = React.lazy(() => import('./components/Cropper'));
-    return (
-      <React.Suspense fallback={<div className="w-screen h-screen bg-transparent" />}>
-        <Cropper />
-      </React.Suspense>
-    );
-  }
+  // Intercept setWindowMode on the web to update our local state and URL search params
+  useEffect(() => {
+    if (window.electronAPI && (window.electronAPI as any).platform === 'web') {
+      (window.electronAPI as any).setWindowMode = async (mode: string) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('window', mode);
+        window.history.pushState({}, '', url.pathname + url.search);
+        setWindowModeState(mode);
+        return Promise.resolve();
+      };
+    }
+  }, []);
+
+  // Listen to popstate to update state when navigating back/forward
+  useEffect(() => {
+    const handlePopState = () => {
+      const mode = new URLSearchParams(window.location.search).get('window') || 'launcher';
+      setWindowModeState(mode);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
 
   // Initialize Analytics
   useEffect(() => {
@@ -456,6 +478,14 @@ const App: React.FC = () => {
           </QueryClientProvider>
         </div>
       </ErrorBoundary>
+    );
+  }
+
+  if (isCropperWindow) {
+    return (
+      <React.Suspense fallback={<div className="w-screen h-screen bg-transparent" />}>
+        <Cropper />
+      </React.Suspense>
     );
   }
 
