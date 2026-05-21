@@ -203,6 +203,27 @@ if (typeof window !== "undefined" && !window.electronAPI) {
         if (prop === "getCurrentLlmConfig") {
           return () => Promise.resolve({ provider: "gemini", model: "gemini-1.5-flash", isOllama: false });
         }
+        if (prop === "getNativelyUsage") {
+          return () => Promise.resolve({ ok: false });
+        }
+        if (prop === "startMeeting") {
+          return () => Promise.resolve({ success: true });
+        }
+        if (prop === "endMeeting") {
+          return () => Promise.resolve({ success: true });
+        }
+        if (prop === "setWindowMode") {
+          return () => Promise.resolve();
+        }
+        if (prop === "setUndetectable") {
+          return () => Promise.resolve({ success: true });
+        }
+        if (prop === "seedDemo") {
+          return () => Promise.resolve({ success: true });
+        }
+        if (prop === "stopAudioTest") {
+          return () => Promise.resolve({ success: true });
+        }
         if (prop === "phoneMirrorGetInfo") {
           return () => Promise.resolve({
             running: false,
