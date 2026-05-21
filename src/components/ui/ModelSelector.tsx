@@ -89,6 +89,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
         if (model === 'llama-3.3-70b-versatile') return 'Groq Llama 3.3';
         if (model === 'gpt-5.4') return 'GPT 5.4';
         if (model === 'claude-sonnet-4-6') return 'Sonnet 4.6';
+        if (model === 'meta/llama-3.1-8b-instruct') return 'NVIDIA Llama 3.1';
+        if (model === 'meta/llama-3.2-11b-vision-instruct') return 'NVIDIA Vision';
 
         // Check dynamic cloud models
         const cloud = cloudModels.find(m => m.id === model);
@@ -150,7 +152,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
                                     cloudModels.map((m, idx) => {
                                         const prevProvider = idx > 0 ? cloudModels[idx - 1].provider : null;
                                         const showDivider = prevProvider && prevProvider !== m.provider;
-                                        const icon = m.provider === 'gemini' ? <Monitor size={14} /> : <Cloud size={14} />;
+                                        const icon = m.provider === 'gemini' ? <Monitor size={14} /> : m.provider === 'nvidia' ? <Server size={14} /> : <Cloud size={14} />;
                                         return (
                                             <React.Fragment key={m.id}>
                                                 {showDivider && <div className="h-px bg-border-subtle my-1" />}

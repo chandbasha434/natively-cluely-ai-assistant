@@ -65,7 +65,30 @@ interface ElectronAPI {
   setClaudeApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setNativelyApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   getNativelyUsage: () => Promise<{ ok: boolean; plan?: string; quota?: { transcription: { used: number; limit: number; remaining: number }; ai: { used: number; limit: number; remaining: number }; search: { used: number; limit: number; remaining: number }; resets_at: string }; member_since?: string; error?: string; status?: number }>
-  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; hasNativelyKey: boolean; googleServiceAccountPath: string | null; sttProvider: string; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; hasSonioxKey: boolean }>
+  getStoredCredentials: () => Promise<{ 
+    hasGeminiKey: boolean; 
+    hasGroqKey: boolean; 
+    hasOpenaiKey: boolean; 
+    hasClaudeKey: boolean; 
+    hasNativelyKey: boolean; 
+    hasNvidiaKey: boolean;
+    googleServiceAccountPath: string | null; 
+    sttProvider: string;
+    geminiPreferredModel: string | null;
+    groqPreferredModel: string | null;
+    openaiPreferredModel: string | null;
+    claudePreferredModel: string | null;
+    nvidiaPreferredModel: string | null;
+    hasSttGroqKey: boolean; 
+    hasSttOpenaiKey: boolean; 
+    hasDeepgramKey: boolean; 
+    hasElevenLabsKey: boolean; 
+    hasAzureKey: boolean; 
+    azureRegion: string; 
+    hasIbmWatsonKey: boolean; 
+    ibmWatsonRegion: string; 
+    hasSonioxKey: boolean 
+  }>
   // Free Trial
   startTrial:     () => Promise<{ ok: boolean; trial_token?: string; started_at?: string; expires_at?: string; expired?: boolean; already_used?: boolean; converted_to?: string | null; usage?: { ai: number; stt_seconds: number; search: number }; limits?: { duration_ms: number; ai_requests: number; stt_minutes: number; search_requests: number }; error?: string; status?: number }>
   getTrialStatus: () => Promise<{ ok: boolean; expired?: boolean; remaining_ms?: number; started_at?: string; expires_at?: string; converted_to?: string | null; usage?: { ai: number; stt_seconds: number; search: number }; limits?: object; error?: string }>
@@ -563,7 +586,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getAvailableOllamaModels: () => ipcRenderer.invoke("get-available-ollama-models"),
   switchToOllama: (model?: string, url?: string) => ipcRenderer.invoke("switch-to-ollama", model, url),
   switchToGemini: (apiKey?: string, modelId?: string) => ipcRenderer.invoke("switch-to-gemini", apiKey, modelId),
-  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => ipcRenderer.invoke("test-llm-connection", provider, apiKey),
+  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'nvidia', apiKey: string) => ipcRenderer.invoke("test-llm-connection", provider, apiKey),
   selectServiceAccount: () => ipcRenderer.invoke("select-service-account"),
 
   // API Key Management
@@ -571,6 +594,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setGroqApiKey: (apiKey: string) => ipcRenderer.invoke("set-groq-api-key", apiKey),
   setOpenaiApiKey: (apiKey: string) => ipcRenderer.invoke("set-openai-api-key", apiKey),
   setClaudeApiKey: (apiKey: string) => ipcRenderer.invoke("set-claude-api-key", apiKey),
+  setNvidiaApiKey: (apiKey: string) => ipcRenderer.invoke("set-nvidia-api-key", apiKey),
   setNativelyApiKey: (apiKey: string) => ipcRenderer.invoke("set-natively-api-key", apiKey),
   getNativelyUsage: () => ipcRenderer.invoke("get-natively-usage"),
   getStoredCredentials: () => ipcRenderer.invoke("get-stored-credentials"),
@@ -1148,8 +1172,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setTavilyApiKey: (apiKey: string) => ipcRenderer.invoke('set-tavily-api-key', apiKey),
 
   // Dynamic Model Discovery
-  fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => ipcRenderer.invoke('fetch-provider-models', provider, apiKey),
-  setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string) => ipcRenderer.invoke('set-provider-preferred-model', provider, modelId),
+  fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'nvidia', apiKey: string) => ipcRenderer.invoke('fetch-provider-models', provider, apiKey),
+  setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'nvidia', modelId: string) => ipcRenderer.invoke('set-provider-preferred-model', provider, modelId),
 
   // License Management
   licenseActivate: (key: string) => ipcRenderer.invoke('license:activate', key),

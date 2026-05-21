@@ -83,6 +83,7 @@ export const AIProvidersSettings: React.FC = () => {
     const [groqApiKey, setGroqApiKey] = useState('');
     const [openaiApiKey, setOpenaiApiKey] = useState('');
     const [claudeApiKey, setClaudeApiKey] = useState('');
+    const [nvidiaApiKey, setNvidiaApiKey] = useState('');
 
     // Status
     const [savedStatus, setSavedStatus] = useState<Record<string, boolean>>({});
@@ -132,6 +133,7 @@ export const AIProvidersSettings: React.FC = () => {
                         groq: creds.hasGroqKey,
                         openai: creds.hasOpenaiKey,
                         claude: creds.hasClaudeKey,
+                        nvidia: creds.hasNvidiaKey,
                         natively: creds.hasNativelyKey || false
                     });
                     // Load preferred models
@@ -140,6 +142,7 @@ export const AIProvidersSettings: React.FC = () => {
                     if (creds.groqPreferredModel) pm.groq = creds.groqPreferredModel;
                     if (creds.openaiPreferredModel) pm.openai = creds.openaiPreferredModel;
                     if (creds.claudePreferredModel) pm.claude = creds.claudePreferredModel;
+                    if (creds.nvidiaPreferredModel) pm.nvidia = creds.nvidiaPreferredModel;
                     setPreferredModels(pm);
                 }
 
@@ -284,6 +287,8 @@ export const AIProvidersSettings: React.FC = () => {
             if (provider === 'openai') result = await window.electronAPI.setOpenaiApiKey(key);
             // @ts-ignore
             if (provider === 'claude') result = await window.electronAPI.setClaudeApiKey(key);
+            // @ts-ignore
+            if (provider === 'nvidia') result = await window.electronAPI.setNvidiaApiKey(key);
 
             if (result && result.success) {
                 setSavedStatus(prev => ({ ...prev, [provider]: true }));
@@ -310,6 +315,8 @@ export const AIProvidersSettings: React.FC = () => {
             if (provider === 'openai') result = await window.electronAPI.setOpenaiApiKey('');
             // @ts-ignore
             if (provider === 'claude') result = await window.electronAPI.setClaudeApiKey('');
+            // @ts-ignore
+            if (provider === 'nvidia') result = await window.electronAPI.setNvidiaApiKey('');
 
             if (result && result.success) {
                 setHasStoredKey(prev => ({ ...prev, [provider]: false }));
@@ -596,6 +603,26 @@ export const AIProvidersSettings: React.FC = () => {
                         keyPlaceholder="sk-ant-..."
                         keyUrl="https://console.anthropic.com/settings/keys"
                         onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, claude: model }))}
+                    />
+ 
+                    {/* NVIDIA NIM */}
+                    <ProviderCard
+                        providerId="nvidia"
+                        providerName="NVIDIA NIM"
+                        apiKey={nvidiaApiKey}
+                        preferredModel={preferredModels.nvidia}
+                        hasStoredKey={!!hasStoredKey.nvidia}
+                        onKeyChange={setNvidiaApiKey}
+                        onSaveKey={async () => { await handleSaveKey('nvidia', nvidiaApiKey, setNvidiaApiKey); }}
+                        onRemoveKey={() => handleRemoveKey('nvidia', setNvidiaApiKey)}
+                        onTestConnection={() => handleTestConnection('nvidia', nvidiaApiKey)}
+                        testStatus={testStatus.nvidia || 'idle'}
+                        testError={testError.nvidia}
+                        savingStatus={!!savingStatus.nvidia}
+                        savedStatus={!!savedStatus.nvidia}
+                        keyPlaceholder="nvapi-..."
+                        keyUrl="https://build.nvidia.com/"
+                        onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, nvidia: model }))}
                     />
 
                 </div>

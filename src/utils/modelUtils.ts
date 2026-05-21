@@ -3,7 +3,7 @@ export const STANDARD_CLOUD_MODELS: Record<string, {
     ids: string[];
     names: string[];
     descs: string[];
-    pmKey: 'geminiPreferredModel' | 'openaiPreferredModel' | 'claudePreferredModel' | 'groqPreferredModel';
+    pmKey: 'geminiPreferredModel' | 'openaiPreferredModel' | 'claudePreferredModel' | 'groqPreferredModel' | 'nvidiaPreferredModel';
 }> = {
     gemini: {
         hasKeyCheck: (creds) => !!creds?.hasGeminiKey,
@@ -32,6 +32,13 @@ export const STANDARD_CLOUD_MODELS: Record<string, {
         names: ['Groq Llama 3.3'],
         descs: ['Ultra Fast'],
         pmKey: 'groqPreferredModel'
+    },
+    nvidia: {
+        hasKeyCheck: (creds) => !!creds?.hasNvidiaKey,
+        ids: ['meta/llama-3.1-8b-instruct', 'meta/llama-3.2-11b-vision-instruct'],
+        names: ['NVIDIA Llama 3.1', 'NVIDIA Llama 3.2 Vision'],
+        descs: ['NVIDIA NIM • Fast Text', 'NVIDIA NIM • Vision + Screen'],
+        pmKey: 'nvidiaPreferredModel'
     },
 };
 

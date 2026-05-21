@@ -283,7 +283,7 @@ export class AppState {
   constructor() {
     // 1. Load boot-critical settings first (used by WindowHelpers)
     const settingsManager = SettingsManager.getInstance();
-    this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
+    this.isUndetectable = settingsManager.get('isUndetectable') ?? true; // Default ON: hide from screenshots/screen-share
     this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
     this._verboseLogging = settingsManager.get('verboseLogging') ?? false;
     setVerboseLoggingFlag(this._verboseLogging);
@@ -964,6 +964,25 @@ export class AppState {
       // Feed final recruiter (system audio) transcripts to negotiation tracker
       if (segment.isFinal && speaker === 'interviewer') {
         this.knowledgeOrchestrator?.feedInterviewerUtterance?.(segment.text);
+
+        // ── AUTO-ANSWER: when interviewer finishes a real sentence, automatically
+        //    trigger "What to Answer" so the AI responds without any keypress.
+        //    Guard: require ≥25 chars AND ≥4 words to avoid firing on noise,
+        //    keyboard sounds, or short filler words ("okay", "yes", "uh-huh").
+        const trimmed = segment.text.trim();
+        const wordCount = trimmed.split(/\s+/).filter(w => w.length > 0).length;
+        const isRealUtterance = trimmed.length >= 25 && wordCount >= 4;
+        if (isRealUtterance) {
+          console.log(`[Main][AutoAnswer] Interviewer spoke (${wordCount} words) → triggering whatToAnswer`);
+          // 1.5s delay — transcript UI updates first and debounces rapid segments
+          setTimeout(() => {
+            BrowserWindow.getAllWindows().forEach(win => {
+              if (!win.isDestroyed()) {
+                win.webContents.send('global-shortcut', { action: 'whatToAnswer' });
+              }
+            });
+          }, 1500);
+        }
       }
     });
 
@@ -2848,7 +2867,7 @@ async function initializeApp() {
   // constructed yet, so we cannot call appState.getUndetectable().
   if (process.platform === 'darwin') {
     // SettingsManager is already statically imported — no require() needed.
-    const isUndetectableOnStartup = SettingsManager.getInstance().get('isUndetectable') ?? false;
+    const isUndetectableOnStartup = SettingsManager.getInstance().get('isUndetectable') ?? true; // Default ON
     if (isUndetectableOnStartup) {
       app.dock.hide();
     }
@@ -2859,6 +2878,20 @@ async function initializeApp() {
   // This fixes the issue where keys (especially in production) aren't loaded in time for RAG/LLM
   const { CredentialsManager } = require('./services/CredentialsManager');
   CredentialsManager.getInstance().init();
+
+  // Auto-configure Groq STT if no provider is configured but a Groq key exists.
+  // This fixes the 'googleSTT=NULL' issue where STT silently does nothing.
+  {
+    const cm = CredentialsManager.getInstance();
+    if (cm.getSttProvider() === 'none') {
+      const groqKey = cm.getGroqApiKey() || process.env.GROQ_API_KEY;
+      if (groqKey) {
+        if (!cm.getGroqSttApiKey()) cm.setGroqSttApiKey(groqKey);
+        cm.setSttProvider('groq');
+        console.log('[Init] Auto-configured Groq as STT provider (whisper-large-v3-turbo)');
+      }
+    }
+  }
 
   // 4. Initialize State
   const appState = AppState.getInstance()

@@ -47,15 +47,16 @@ ANSWER SHAPE: ${intentResult.answerShape}
             }
 
             const extraContext = contextParts.join('\n\n');
-            const fullMessage = extraContext
+
+            // Use streamChat with proper separation:
+            // message: "What should I say next?" (the user's intent)
+            // context: extraContext + cleanedTranscript
+            // This allows LLMHelper's global CONTEXT_CAP to truncate the transcript if it's too large.
+            const combinedContext = extraContext
                 ? `${extraContext}\n\nCONVERSATION:\n${cleanedTranscript}`
                 : cleanedTranscript;
 
-            // Use Universal Prompt
-            // Note: WhatToAnswer has a very specific prompt. 
-            // We should use UNIVERSAL_WHAT_TO_ANSWER_PROMPT as override
-
-            yield* this.llmHelper.streamChat(fullMessage, imagePaths, undefined, UNIVERSAL_WHAT_TO_ANSWER_PROMPT);
+            yield* this.llmHelper.streamChat("What should I say next?", imagePaths, combinedContext, UNIVERSAL_WHAT_TO_ANSWER_PROMPT);
 
         } catch (error) {
             console.error("[WhatToAnswerLLM] Stream failed:", error);

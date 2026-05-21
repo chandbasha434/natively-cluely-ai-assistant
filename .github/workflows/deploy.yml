@@ -1,0 +1,81 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-mac:
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin, aarch64-apple-darwin
+
+      - name: Install NPM Dependencies
+        run: npm ci
+
+      - name: Build Web App
+        run: npm run build
+
+      - name: Build Electron Main
+        run: npm run build:electron
+
+      - name: Build Rust Native Module (Universal macOS)
+        run: cross-env NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native
+
+      - name: Fetch macOS sharp Dependencies
+        run: node scripts/ensure-sharp-mac-deps.js
+
+      - name: Build and Publish DMG/ZIP to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac -p always
+
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install NPM Dependencies
+        run: npm ci
+        env:
+          SHARP_IGNORE_GLOBAL_LIBVIPS: 1
+
+      - name: Build Web App
+        run: npm run build
+
+      - name: Build Electron Main
+        run: npm run build:electron
+
+      - name: Build Rust Native Module
+        run: npm run build:native
+
+      - name: Build and Publish NSIS/Portable Installer to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win -p always

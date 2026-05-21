@@ -251,6 +251,12 @@ const App: React.FC = () => {
       trialPollId = setInterval(checkTrial, 30_000);
     }).catch(() => {});
 
+    const handleGlobalClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      console.log('[Global Click] Target:', target?.tagName, 'Class:', target?.className, 'ID:', target?.id);
+    };
+    window.addEventListener('click', handleGlobalClick, true);
+
     // Listen for trial-ended event (emitted by trial:end-byok IPC)
     const removeTrialListener = window.electronAPI?.onTrialEnded?.(() => {
       setActiveTrial(null);
@@ -323,6 +329,7 @@ const App: React.FC = () => {
       if (trialPollId) clearInterval(trialPollId);
       if (removeTrialListener) removeTrialListener();
       if (removeOpenSettingsTab) removeOpenSettingsTab();
+      window.removeEventListener('click', handleGlobalClick, true);
     }
   }, []);
 
@@ -373,9 +380,11 @@ const App: React.FC = () => {
         console.log("[App] Using CoreAudio backend (Default).");
       }
 
+      console.log('[App] Starting meeting via IPC...');
       const result = await window.electronAPI.startMeeting({
         audio: { inputDeviceId, outputDeviceId }
       });
+      console.log('[App] startMeeting result:', result);
       if (result.success) {
         analytics.trackMeetingStarted();
         // Switch to Overlay Mode via IPC

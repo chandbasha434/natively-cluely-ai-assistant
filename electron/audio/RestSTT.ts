@@ -113,18 +113,18 @@ const PROVIDER_CONFIGS: Record<RestSttProvider, ProviderConfigFactory> = {
     },
 };
 
-// Minimum buffer size before sending (avoid sending tiny fragments)
-// 16kHz * 2 bytes/sample * 1 channel * 0.125 seconds = 4000 bytes
-// Lowered from 16000 to allow short command utterances ("Yes", "Stop") to flush instantly.
-const MIN_BUFFER_BYTES = 4000;
+// Minimum buffer size before sending (avoid sending tiny fragments).
+// Lowered to 2000 bytes so short utterances ("Yes", "Go ahead") flush reliably.
+const MIN_BUFFER_BYTES = 2000;
 
 // Safety-net upload interval (ms). Primary flush is triggered by speech_ended events.
-// This fires as a backstop if someone talks continuously for >10s without any pause,
-// preventing unbounded buffer growth and Whisper API timeouts.
-const SAFETY_NET_INTERVAL_MS = 10000;
+// Reduced from 5s to 2s for significantly faster live responsiveness.
+const SAFETY_NET_INTERVAL_MS = 2000;
 
-// Silence threshold - if RMS is below this, skip the upload
-const SILENCE_RMS_THRESHOLD = 50;
+// Silence threshold — if RMS is below this, skip the upload.
+// Lowered from 50 to 15 to capture interviewer audio from video calls
+// (system audio output tends to have lower amplitude than the local mic).
+const SILENCE_RMS_THRESHOLD = 15;
 
 export class RestSTT extends EventEmitter {
     private provider: RestSttProvider;

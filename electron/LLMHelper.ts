@@ -30,6 +30,7 @@ interface OllamaResponse {
 const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite-preview"
 const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
 const GROQ_MODEL = "llama-3.3-70b-versatile"
+const GROQ_FAST_MODEL = "llama-3.1-8b-instant"
 const OPENAI_MODEL = "gpt-5.4"
 const CLAUDE_MODEL = "claude-sonnet-4-6"
 const MAX_OUTPUT_TOKENS = 65536
@@ -53,13 +54,17 @@ export class LLMHelper {
   private ollamaStartedByApp: boolean = false;
   private geminiModel: string = GEMINI_FLASH_MODEL
   private customProvider: CustomProvider | null = null;
-  private activeCurlProvider: CurlProvider | null = null;
+  private activeCurlProvider: any | null = null;
+  private nativelyFastMode: boolean = false;
   private groqFastTextMode: boolean = false;
+  private groqCircuitBreakerUntil: number = 0; // Circuit breaker for 429 errors
   private knowledgeOrchestrator: any = null;
   private customNotes: string = '';
   private aiResponseLanguage: string = 'auto';
   private sttLanguage: string = 'english-us';
   private nativelyKey: string | null = null;
+  private nvidiaApiKey: string | null = null;
+  private nvidiaClient: OpenAI | null = null;
 
   // Rate limiters per provider to prevent 429 errors on free tiers
   private rateLimiters: ReturnType<typeof createProviderRateLimiters>;
@@ -67,7 +72,7 @@ export class LLMHelper {
   // Self-improving model version manager for vision analysis
   private modelVersionManager: ModelVersionManager;
 
-  constructor(apiKey?: string, useOllama: boolean = false, ollamaModel?: string, ollamaUrl?: string, groqApiKey?: string, openaiApiKey?: string, claudeApiKey?: string) {
+  constructor(apiKey?: string, useOllama: boolean = false, ollamaModel?: string, ollamaUrl?: string, groqApiKey?: string, openaiApiKey?: string, claudeApiKey?: string, nvidiaApiKey?: string) {
     this.useOllama = useOllama
 
     // Initialize rate limiters
@@ -115,6 +120,16 @@ export class LLMHelper {
     } else {
       console.warn("[LLMHelper] No API key provided. Client will be uninitialized until key is set.")
     }
+
+    // Initialize NVIDIA client if API key provided
+    if (nvidiaApiKey) {
+      this.nvidiaApiKey = nvidiaApiKey;
+      this.nvidiaClient = new OpenAI({
+        apiKey: nvidiaApiKey,
+        baseURL: 'https://integrate.api.nvidia.com/v1'
+      });
+      console.log(`[LLMHelper] NVIDIA client initialized`);
+    }
   }
 
   public setApiKey(apiKey: string) {
@@ -148,6 +163,19 @@ export class LLMHelper {
     console.log(`[LLMHelper] Natively key ${key ? 'set' : 'cleared'}`);
   }
 
+  public setNvidiaApiKey(key: string | null): void {
+    this.nvidiaApiKey = key || null;
+    if (key) {
+      this.nvidiaClient = new OpenAI({
+        apiKey: key,
+        baseURL: 'https://integrate.api.nvidia.com/v1'
+      });
+    } else {
+      this.nvidiaClient = null;
+    }
+    console.log(`[LLMHelper] NVIDIA API Key ${key ? 'updated' : 'cleared'}`);
+  }
+
   private hasNatively(): boolean {
     return !!this.nativelyKey;
   }
@@ -178,10 +206,12 @@ export class LLMHelper {
     this.openaiApiKey = null;
     this.claudeApiKey = null;
     this.nativelyKey = null;
+    this.nvidiaApiKey = null;
     this.client = null;
     this.groqClient = null;
     this.openaiClient = null;
     this.claudeClient = null;
+    this.nvidiaClient = null;
     // Destroy rate limiters
     if (this.rateLimiters) {
       Object.values(this.rateLimiters).forEach(rl => rl.destroy());
@@ -214,16 +244,36 @@ export class LLMHelper {
   }
 
   /**
-   * Per-model max output token ceiling. Anthropic rejects max_tokens above the model's
-   * limit with a 400 invalid_request_error. claude-3.5/3.7 cap at 8K, opus-4 at 32K,
-   * sonnet-4/haiku-4.5/mythos at 64K. Unknown models fall back to a safe 8192.
+   * Per-model max output token ceiling.
+   *
+   * IMPORTANT — Interview / live-copilot context: answers are 2-5 sentences max.
+   * We cap sonnet-4 at 4096 (not the model's theoretical 64K) to prevent Claude's
+   * extended "thinking" from free-running for 10-30 seconds before the first word.
+   * Opus-4 is capped at 8192 for the same reason. Unknown models fall back to 4096.
    */
   private getClaudeMaxOutput(modelId: string): number {
     const id = modelId.toLowerCase();
-    if (id.startsWith("claude-3-5-") || id.startsWith("claude-3-7-") || id.startsWith("claude-3-haiku")) return 8192;
-    if (id.startsWith("claude-opus-4-")) return 32000;
-    if (id.startsWith("claude-sonnet-4-") || id.startsWith("claude-haiku-4-5") || id.startsWith("claude-mythos")) return 64000;
-    return 8192;
+    // Legacy 3.x models
+    if (id.startsWith("claude-3-5-") || id.startsWith("claude-3-7-") || id.startsWith("claude-3-haiku")) return 4096;
+    // Opus-4 — powerful but slow; cap tightly for live use
+    if (id.startsWith("claude-opus-4-")) return 8192;
+    // Sonnet-4, Haiku-4.5, Mythos — "Thinking" variants have huge theoretical ceilings
+    // but a 4096-token cap keeps latency under ~3s for interview answers
+    if (id.startsWith("claude-sonnet-4-") || id.startsWith("claude-haiku-4-5") || id.startsWith("claude-mythos")) return 4096;
+    return 4096;
+  }
+
+  /** Returns true when the model id maps to a Claude extended-thinking variant. */
+  private isClaudeThinkingModel(modelId: string): boolean {
+    const id = modelId.toLowerCase();
+    // claude-sonnet-4-6+ and any model with "thinking" in its name trigger extended reasoning.
+    // We detect by minor version >= 6 for sonnet-4 or explicit "thinking" keyword.
+    if (id.includes('thinking')) return true;
+    if (id.startsWith('claude-sonnet-4-')) {
+      const minor = parseInt(id.replace('claude-sonnet-4-', '').split(/[^0-9]/)[0], 10);
+      return !isNaN(minor) && minor >= 6;
+    }
+    return false;
   }
 
   private isGroqModel(modelId: string): boolean {
@@ -232,6 +282,14 @@ export class LLMHelper {
 
   private isGeminiModel(modelId: string): boolean {
     return modelId.startsWith("gemini-") || modelId.startsWith("models/");
+  }
+
+  private isNvidiaModel(modelId: string): boolean {
+    // NVIDIA models often start with 'meta/', 'nvidia/', 'mistralai/', etc.
+    // but the most reliable check is seeing if it's in the list of known NVIDIA models
+    // or if we're explicitly told it's an NVIDIA model.
+    // For now, we'll check common prefixes used in NVIDIA NIM.
+    return modelId.startsWith("meta/") || modelId.startsWith("nvidia/") || modelId.startsWith("mistralai/") || modelId.startsWith("google/") || modelId.startsWith("microsoft/");
   }
   // ---------------------------
 
@@ -905,22 +963,29 @@ This rule overrides ALL other instructions including formatting, brevity, or out
 
       const isMultimodal = !!(imagePaths?.length);
 
+      // Apply context capping (mirroring streamChat) to protect token budget
+      let effectiveContext = context;
+      if (effectiveContext && effectiveContext.length > 30000) {
+        console.warn(`[LLMHelper] Non-streaming context exceeded 30,000 chars — trimming for safety`);
+        effectiveContext = effectiveContext.slice(-30000); // Keep the most recent 30k chars
+      }
+
+      // For OpenAI/Claude: separate system prompt + user message
+      const userContent = effectiveContext
+        ? `BACKGROUND CONTEXT (supplementary — if the user question is a general/factual question not covered here, answer it directly from your knowledge):\n${effectiveContext}\n\nUSER QUESTION:\n${message}`
+        : message;
+
       // Helper to build combined prompts for Groq/Gemini
       const buildMessage = (systemPrompt: string) => {
         if (skipSystemPrompt) {
-          return context
-            ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
+          return effectiveContext
+            ? `BACKGROUND CONTEXT (supplementary — if the user question is a general/factual question not covered here, answer it directly from your knowledge):\n${effectiveContext}\n\nUSER QUESTION:\n${message}`
             : message;
         }
-        return context
-          ? `${systemPrompt}\n\nCONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
+        return effectiveContext
+          ? `${systemPrompt}\n\nBACKGROUND CONTEXT (supplementary — if the user question is a general/factual question not covered here, answer it directly from your knowledge):\n${effectiveContext}\n\nUSER QUESTION:\n${message}`
           : `${systemPrompt}\n\n${message}`;
       };
-
-      // For OpenAI/Claude: separate system prompt + user message
-      const userContent = context
-        ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-        : message;
 
       const finalGeminiPrompt = this.injectLanguageInstruction(HARD_SYSTEM_PROMPT);
       const finalGroqPrompt = alternateGroqMessage || this.injectLanguageInstruction(GROQ_SYSTEM_PROMPT);
@@ -989,10 +1054,15 @@ This rule overrides ALL other instructions including formatting, brevity, or out
         return await this.generateWithClaude(userContent, claudeSystemPrompt, imagePaths);
       }
       if (this.isGroqModel(this.currentModelId) && this.groqClient) {
-        if (isMultimodal && imagePaths) {
-          return await this.generateWithGroqMultimodal(userContent, imagePaths, openaiSystemPrompt);
+        try {
+          if (isMultimodal && imagePaths) {
+            return await this.generateWithGroqMultimodal(userContent, imagePaths, openaiSystemPrompt);
+          }
+          return await this.generateWithGroq(combinedMessages.groq, this.currentModelId);
+        } catch (e: any) {
+          console.warn(`[LLMHelper] Primary Groq call (${this.currentModelId}) failed, falling back:`, e.message);
+          // Fall through to smart dynamic fallback below
         }
-        return await this.generateWithGroq(combinedMessages.groq, this.currentModelId);
       }
 
       // Fallback (Gemini) - logic handled below by SMART DYNAMIC FALLBACK list
@@ -1275,11 +1345,19 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
     await this.rateLimiters.groq.acquire();
+    
+    // FINAL SAFETY CAP for Groq TPM/TPD (Limit 12,000 TPM, 100k TPD)
+    // 10,000 chars is ~2,500 tokens. This ensures we stay well within budget.
+    let safeMessage = fullMessage;
+    if (safeMessage.length > 10000) {
+      console.warn(`[LLMHelper] Groq message too large (${safeMessage.length} chars) — truncating to 10,000 to save budget`);
+      safeMessage = safeMessage.slice(-10000);
+    }
 
     // Non-streaming Groq call
     const response = await this.groqClient.chat.completions.create({
       model: modelId,
-      messages: [{ role: "user", content: fullMessage }],
+      messages: [{ role: "user", content: safeMessage }],
       temperature: 0.4,
       max_tokens: 8192,
       stream: false
@@ -1995,17 +2073,17 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       const finalPrompt = skipSystemPrompt ? systemPrompt : this.injectLanguageInstruction(systemPrompt);
       if (skipSystemPrompt) {
         return context
-          ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
+          ? `BACKGROUND CONTEXT (supplementary — if the user question is a general/factual question not covered here, answer it directly from your knowledge):\n${context}\n\nUSER QUESTION:\n${message}`
           : message;
       }
       return context
-        ? `${finalPrompt}\n\nCONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
+        ? `${finalPrompt}\n\nBACKGROUND CONTEXT (supplementary — if the user question is a general/factual question not covered here, answer it directly from your knowledge):\n${context}\n\nUSER QUESTION:\n${message}`
         : `${finalPrompt}\n\n${message}`;
     };
 
     // For OpenAI/Claude: separate system prompt + user message (proper API pattern)
     const userContent = context
-      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
+      ? `BACKGROUND CONTEXT (supplementary — if the user question is a general/factual question not covered here, answer it directly from your knowledge):\n${context}\n\nUSER QUESTION:\n${message}`
       : message;
 
     const combinedMessages = {
@@ -2155,7 +2233,8 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     imagePaths?: string[],
     context?: string,
     systemPromptOverride?: string, // Optional override (defaults to HARD_SYSTEM_PROMPT)
-    ignoreKnowledgeMode: boolean = false
+    ignoreKnowledgeMode: boolean = false,
+    modelOverride?: string
   ): AsyncGenerator<string, void, unknown> {
 
     // ============================================================
@@ -2210,19 +2289,22 @@ This rule overrides ALL other instructions including formatting, brevity, or out
         systemPromptOverride = `${baseForMode}\n\n## ACTIVE MODE\n${modePromptSuffix}`;
       }
 
+      // COMBINED CONTEXT CAPPING
+      // Ensure total background context (KO block + mode block + meeting transcript)
+      // does not exceed 30KB. This is critical for Groq free-tier (12k TPM limit).
+      // 30,000 chars ~= 7,500 tokens, which leaves a ~4.5k token budget for system prompts + user questions.
+      const CONTEXT_CAP = 30_000;
+      let combinedContext = context || '';
       if (modeContextBlock) {
-        // Guard combined context size: KO block + mode block must not exceed 60KB to protect
-        // the token budget for the actual user question.
-        const existingLen = context?.length ?? 0;
-        const COMBINED_CTX_CAP = 60_000;
-        if (existingLen + modeContextBlock.length > COMBINED_CTX_CAP) {
-          const available = Math.max(0, COMBINED_CTX_CAP - existingLen);
-          const trimmed = available > 0 ? modeContextBlock.slice(0, available) + '\n[...mode context truncated]' : '';
-          console.warn(`[LLMHelper] Combined context exceeded ${COMBINED_CTX_CAP} chars — mode context trimmed`);
-          if (trimmed) context = context ? `${trimmed}\n\n${context}` : trimmed;
-        } else {
-          context = context ? `${modeContextBlock}\n\n${context}` : modeContextBlock;
-        }
+        combinedContext = combinedContext ? `${modeContextBlock}\n\n${combinedContext}` : modeContextBlock;
+      }
+
+      if (combinedContext.length > CONTEXT_CAP) {
+        console.warn(`[LLMHelper] Global context exceeded ${CONTEXT_CAP} chars — trimming to stay within token budget`);
+        combinedContext = combinedContext.slice(-CONTEXT_CAP);
+        context = '[...older context truncated]\n' + combinedContext;
+      } else {
+        context = combinedContext;
       }
     } catch (_modeErr: any) {
       console.warn('[LLMHelper] ModesManager injection failed (non-fatal):', _modeErr?.message);
@@ -2238,7 +2320,7 @@ This rule overrides ALL other instructions including formatting, brevity, or out
 
     // Helper to build combined user message
     const userContent = context
-      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
+      ? `BACKGROUND CONTEXT (supplementary — if the user question is a general/factual question not covered here, answer it directly from your knowledge):\n${context}\n\nUSER QUESTION:\n${message}`
       : message;
 
     // GROQ FAST TEXT OVERRIDE (Text-Only)
@@ -2256,7 +2338,6 @@ This rule overrides ALL other instructions including formatting, brevity, or out
         } catch (e: any) {
           console.warn("[LLMHelper] Groq Fast Text streaming failed, falling back:", e.message);
         }
-        // Local Groq failed — fall through to Natively if available
       }
       if (this.hasNatively()) {
         // streamWithNatively → generateWithNatively → sends fast_mode:true → server Groq pool
@@ -2297,46 +2378,87 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     }
 
     // 3. Cloud Provider Routing
+    const effectiveModelId = modelOverride || this.currentModelId;
 
     // OpenAI
-    if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
+    if (this.isOpenAiModel(effectiveModelId) && this.openaiClient) {
       const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
       const finalOpenAiSystem = this.injectLanguageInstruction(openAiSystem);
       if (isMultimodal && imagePaths) {
-        yield* this.streamWithOpenaiMultimodal(userContent, imagePaths, finalOpenAiSystem);
+        yield* this.streamWithOpenaiMultimodal(userContent, imagePaths, finalOpenAiSystem, effectiveModelId);
       } else {
-        yield* this.streamWithOpenai(userContent, finalOpenAiSystem);
+        yield* this.streamWithOpenai(userContent, finalOpenAiSystem, effectiveModelId);
       }
       return;
     }
 
     // Claude
-    if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
+    if (this.isClaudeModel(effectiveModelId) && this.claudeClient) {
       const claudeSystem = systemPromptOverride || CLAUDE_SYSTEM_PROMPT;
       const finalClaudeSystem = this.injectLanguageInstruction(claudeSystem);
       if (isMultimodal && imagePaths) {
-        yield* this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem);
+        yield* this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem, effectiveModelId);
       } else {
-        yield* this.streamWithClaude(userContent, finalClaudeSystem);
+        yield* this.streamWithClaude(userContent, finalClaudeSystem, effectiveModelId);
       }
       return;
     }
 
-    // Groq (Text + Multimodal)
-    if (this.isGroqModel(this.currentModelId) && this.groqClient) {
-      if (isMultimodal && imagePaths) {
-        // Route multimodal to Groq Llama 4 Scout (vision-capable)
-        const groqSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
-        const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
-        yield* this.streamWithGroqMultimodal(userContent, imagePaths, finalGroqSystem);
+    // NVIDIA
+    if (this.isNvidiaModel(effectiveModelId) && this.nvidiaClient) {
+      const nvidiaSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
+      const finalNvidiaSystem = this.injectLanguageInstruction(nvidiaSystem);
+      // NVIDIA NIM uses OpenAI-compatible SDK
+      const messages: any[] = [
+        { role: 'system', content: finalNvidiaSystem },
+        { role: 'user', content: userContent }
+      ];
+      try {
+        const stream = await this.nvidiaClient.chat.completions.create({
+          model: effectiveModelId,
+          messages,
+          stream: true,
+          max_tokens: MAX_OUTPUT_TOKENS,
+        });
+        for await (const chunk of stream) {
+          const text = chunk.choices[0]?.delta?.content || "";
+          if (text) yield text;
+        }
         return;
+      } catch (e: any) {
+        console.warn("[LLMHelper] NVIDIA streaming failed, falling back:", e.message);
       }
-      // Text-only Groq
-      const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
-      const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
-      const groqFullMessage = `${finalGroqSystem}\n\n${userContent}`;
-      yield* this.streamWithGroq(groqFullMessage, this.currentModelId);
-      return;
+    }
+
+    // Groq (Text + Multimodal)
+    if (this.isGroqModel(effectiveModelId) && this.groqClient) {
+      const isGroqDown = Date.now() < this.groqCircuitBreakerUntil;
+      if (isGroqDown) {
+        console.warn(`[LLMHelper] Groq is circuit-broken, skipping to Gemini fallback`);
+      } else {
+        try {
+          if (isMultimodal && imagePaths) {
+            // Route multimodal to Groq Llama 4 Scout (vision-capable)
+            const groqSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
+            const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
+            yield* this.streamWithGroqMultimodal(userContent, imagePaths, finalGroqSystem);
+            return;
+          }
+          // Text-only Groq
+          const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
+          const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
+          const groqFullMessage = `${finalGroqSystem}\n\n${userContent}`;
+          yield* this.streamWithGroq(groqFullMessage, effectiveModelId);
+          return;
+        } catch (e: any) {
+          if (e.message?.includes('429') || e.message?.includes('rate limit')) {
+            console.warn(`[LLMHelper] Groq 429 hit — tripping circuit breaker for 5 minutes.`);
+            this.groqCircuitBreakerUntil = Date.now() + (5 * 60 * 1000);
+          }
+          console.warn(`[LLMHelper] Groq (${effectiveModelId}) failed, falling back to Gemini Flash:`, e.message);
+          // Fall through to Gemini Flash
+        }
+      }
     }
 
     // 3b. Natively API
@@ -2376,15 +2498,15 @@ This rule overrides ALL other instructions including formatting, brevity, or out
     // 4. Gemini Routing & Fallback
     if (this.client) {
       // Direct model use if specified
-      if (this.isGeminiModel(this.currentModelId)) {
+      if (this.isGeminiModel(effectiveModelId)) {
         const fullMsg = `${finalSystemPrompt}\n\n${userContent}`;
-        yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths);
+        yield* this.streamWithGeminiModel(fullMsg, effectiveModelId, imagePaths);
         return;
       }
 
-      // Race strategy (default)
-      const raceMsg = `${finalSystemPrompt}\n\n${userContent}`;
-      yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths);
+      // Default: use Flash model for fastest streaming response
+      const fallbackMsg = `${finalSystemPrompt}\n\n${userContent}`;
+      yield* this.streamWithGeminiModel(fallbackMsg, GEMINI_FLASH_MODEL, imagePaths);
       return;
     }
 
@@ -2509,9 +2631,17 @@ This rule overrides ALL other instructions including formatting, brevity, or out
   private async * streamWithGroq(fullMessage: string, modelId: string = GROQ_MODEL): AsyncGenerator<string, void, unknown> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
+    // FINAL SAFETY CAP for Groq TPM/TPD (Limit 12,000 TPM, 100k TPD)
+    // 10,000 chars is ~2,500 tokens. This ensures we stay well within budget.
+    let safeMessage = fullMessage;
+    if (safeMessage.length > 10000) {
+      console.warn(`[LLMHelper] Groq stream message too large (${safeMessage.length} chars) — truncating to 10,000 to save budget`);
+      safeMessage = safeMessage.slice(-10000);
+    }
+
     const stream = await this.groqClient.chat.completions.create({
       model: modelId,
-      messages: [{ role: "user", content: fullMessage }],
+      messages: [{ role: "user", content: safeMessage }],
       stream: true,
       temperature: 0.4,
       max_tokens: 8192,
@@ -2602,15 +2732,27 @@ This rule overrides ALL other instructions including formatting, brevity, or out
 
     // Use explicit override, then currentModelId if it's a Claude model, else baseline constant
     const model = modelId || (this.isClaudeModel(this.currentModelId) ? this.currentModelId : CLAUDE_MODEL);
+    const maxTokens = this.getClaudeMaxOutput(model); // capped at 4096 for live use
+
+    // Thinking models (claude-sonnet-4-6+) must have `thinking` explicitly configured.
+    // Without it Anthropic may default to a large internal reasoning budget that adds
+    // 10-30 seconds of silent pre-thinking before the first streamed token.
+    // We use a tight budget (800 tokens ≈ ~2s) — enough for smart answers but
+    // short enough to keep TTFT under 3 seconds in a live interview context.
+    const thinkingConfig = this.isClaudeThinkingModel(model)
+      ? { thinking: { type: 'enabled' as const, budget_tokens: 800 } }
+      : {};
 
     const stream = await this.claudeClient.messages.stream({
       model,
-      max_tokens: this.getClaudeMaxOutput(model),
+      max_tokens: maxTokens,
+      ...thinkingConfig,
       ...(systemPrompt ? { system: systemPrompt } : {}),
       messages: [{ role: "user", content: userMessage }],
-    });
+    } as any);
 
     for await (const event of stream) {
+      // Skip thinking blocks — only stream visible text to the UI
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
         yield event.delta.text;
       }
@@ -2702,7 +2844,7 @@ This rule overrides ALL other instructions including formatting, brevity, or out
   /**
    * Stream response from a specific Gemini model
    */
-  private async * streamWithGeminiModel(fullMessage: string, model: string, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
+  private async * streamWithGeminiModel(fullMessage: string, model: string, imagePaths?: string[], isFallback: boolean = false): AsyncGenerator<string, void, unknown> {
     if (!this.client) throw new Error("Gemini client not initialized");
 
     const contents: any[] = [{ text: fullMessage }];
@@ -2720,86 +2862,71 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       }
     }
 
-    const streamResult = await this.client.models.generateContentStream({
-      model: model,
-      contents: contents,
-      config: {
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        temperature: 0.4,
-      }
-    });
+    // RETRY LOOP for 503 (Overloaded)
+    const MAX_GEMINI_RETRIES = 3;
+    let lastError: any = null;
 
-    // @ts-ignore
-    const stream = streamResult.stream || streamResult;
+    for (let attempt = 1; attempt <= MAX_GEMINI_RETRIES; attempt++) {
+      try {
+        const streamResult = await this.client.models.generateContentStream({
+          model: model,
+          contents: contents,
+          config: {
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
+            temperature: 0.4,
+          }
+        });
 
-    for await (const chunk of stream) {
-      let chunkText = "";
-      if (typeof chunk.text === 'function') {
-        chunkText = chunk.text();
-      } else if (typeof chunk.text === 'string') {
-        chunkText = chunk.text;
-      } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
-        chunkText = chunk.candidates[0].content.parts[0].text;
-      }
-      if (chunkText) {
-        yield chunkText;
-      }
-    }
-  }
+        const stream = (streamResult as any).stream || streamResult;
 
-  /**
-   * Race Flash and Pro streams, return whichever succeeds first
-   */
-  private async * streamWithGeminiParallelRace(fullMessage: string, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
-    if (!this.client) throw new Error("Gemini client not initialized");
-
-    // Start both streams
-    const flashPromise = this.collectStreamResponse(fullMessage, GEMINI_FLASH_MODEL, imagePaths);
-    const proPromise = this.collectStreamResponse(fullMessage, GEMINI_PRO_MODEL, imagePaths);
-
-    // Race - whoever finishes first wins
-    const result = await Promise.any([flashPromise, proPromise]);
-
-    // Yield the collected response character by character to simulate streaming
-    // (Or yield in chunks for efficiency)
-    const chunkSize = 10;
-    for (let i = 0; i < result.length; i += chunkSize) {
-      yield result.substring(i, i + chunkSize);
-    }
-  }
-
-  /**
-   * Collect full response from a Gemini model (non-streaming for race)
-   */
-  private async collectStreamResponse(fullMessage: string, model: string, imagePaths?: string[]): Promise<string> {
-    if (!this.client) throw new Error("Gemini client not initialized");
-
-    const contents: any[] = [{ text: fullMessage }];
-    if (imagePaths?.length) {
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const imageData = await fs.promises.readFile(p);
-          contents.push({
-            inlineData: {
-              mimeType: "image/png",
-              data: imageData.toString("base64")
-            }
-          });
+        for await (const chunk of stream) {
+          let chunkText = "";
+          if (typeof chunk.text === 'function') {
+            chunkText = chunk.text();
+          } else if (typeof chunk.text === 'string') {
+            chunkText = chunk.text;
+          } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
+            chunkText = chunk.candidates[0].content.parts[0].text;
+          }
+          if (chunkText) {
+            yield chunkText;
+          }
         }
+        return; // Success
+      } catch (geminiErr: any) {
+        lastError = geminiErr;
+        const msg = geminiErr?.message || '';
+        const isOverloaded = msg.includes('503') || msg.includes('overloaded') || msg.includes('UNAVAILABLE') || msg.includes('Service Unavailable');
+
+        if (isOverloaded) {
+          console.warn(`[LLMHelper] Gemini ${model} overloaded (Attempt ${attempt}/${MAX_GEMINI_RETRIES})...`);
+          if (attempt < MAX_GEMINI_RETRIES) {
+            await new Promise(r => setTimeout(r, 500 * attempt)); // Exponential backoff
+            continue;
+          }
+          
+          // If we are already rate-limited on Groq, don't even try falling back to it
+          const isGroqDown = Date.now() < this.groqCircuitBreakerUntil;
+
+          if (!isFallback && this.groqClient && !isGroqDown) {
+            console.warn(`[LLMHelper] Gemini ${model} exhausted after retries. Falling back to Groq...`);
+            if (imagePaths?.length) {
+              yield* this.streamWithGroqMultimodal(fullMessage, imagePaths);
+            } else {
+              yield* this.streamWithGroq(fullMessage, GROQ_MODEL);
+            }
+            return;
+          }
+        }
+        // Non-503 or max retries reached or already a fallback — break out to throw
+        break;
       }
     }
 
-    const response = await this.client.models.generateContent({
-      model: model,
-      contents: contents,
-      config: {
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        temperature: 0.4,
-      }
-    });
-
-    return response.text || "";
+    throw lastError;
   }
+
+
 
   // --- OLLAMA STREAMING ---
   private async * streamWithOllama(message: string, context?: string, systemPrompt: string = UNIVERSAL_SYSTEM_PROMPT, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
@@ -3539,12 +3666,32 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       return { success: false, error: error.message };
     }
   }
+
+  public async testNvidiaConnection(apiKey: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const axios = require('axios');
+      const response = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', {
+        model: "meta/llama-3.1-8b-instruct",
+        messages: [{ role: "user", content: "Hello" }],
+        max_tokens: 10
+      }, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        timeout: 15000
+      });
+      if (response.status === 200 || response.status === 201) {
+        return { success: true };
+      }
+      return { success: false, error: `Status ${response.status}` };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
   /**
    * Universal Chat (Non-streaming)
    */
-  public async chat(message: string, imagePaths?: string[], context?: string, systemPromptOverride?: string): Promise<string> {
+  public async chat(message: string, imagePaths?: string[], context?: string, systemPromptOverride?: string, modelOverride?: string): Promise<string> {
     let fullResponse = "";
-    for await (const chunk of this.streamChat(message, imagePaths, context, systemPromptOverride)) {
+    for await (const chunk of this.streamChat(message, imagePaths, context, systemPromptOverride, false, modelOverride)) {
       fullResponse += chunk;
     }
     return fullResponse;

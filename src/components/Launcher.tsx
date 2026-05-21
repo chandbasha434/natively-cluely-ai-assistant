@@ -449,7 +449,6 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                         <button
                             onClick={() => {
                                 setShowModesOnboarding(false);
-                                localStorage.setItem('natively_seen_modes_onboarding_v5', 'true');
                                 onOpenModes?.();
                             }}
                             title="Modes"
@@ -698,14 +697,14 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                     window.electronAPI?.setWindowMode?.('overlay', true);
                                                     analytics.trackCommandExecuted('resume_meeting_from_launcher');
                                                 } else {
-                                                    onStartMeeting();
-                                                    analytics.trackCommandExecuted('start_natively_cta');
+                                                      onStartMeeting();
+                                                      analytics.trackCommandExecuted('start_natively_cta');
                                                 }
                                             }}
                                             whileHover={{ scale: 1.01, filter: 'brightness(1.1)' }}
                                             whileTap={{ scale: 0.99 }}
                                             transition={{ duration: 0.18, ease: 'easeOut' }}
-                                            className="group relative overflow-hidden text-white px-6 py-3 rounded-full font-celeb font-medium tracking-normal flex items-center justify-center gap-3 backdrop-blur-xl shrink-0"
+                                            className="group relative overflow-hidden text-white px-8 py-4 rounded-full font-celeb font-bold tracking-tight flex items-center justify-center gap-3 backdrop-blur-2xl shrink-0 z-[9999] cursor-pointer"
                                             style={{
                                                 boxShadow: isMeetingActive
                                                     ? 'inset 0 1px 1px rgba(255,255,255,0.7), inset 0 -1px 2px rgba(0,0,0,0.1), 0 2px 10px rgba(16,185,129,0.45), 0 0 0 1px rgba(255,255,255,0.15)'

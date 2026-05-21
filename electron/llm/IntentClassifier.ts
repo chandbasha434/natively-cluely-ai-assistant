@@ -202,7 +202,7 @@ function detectIntentByPattern(lastInterviewerTurn: string): IntentResult | null
     }
 
     // Behavioral patterns
-    if (/(give me an example|tell me about a time|describe a situation|when have you|share an experience)/i.test(text)) {
+    if (/(give me an example|tell me about a time|describe a situation|when have you|share an experience|tell me about your project|describe your project|walk me through your work|what did you do in|your role in|about the project)/i.test(text)) {
         return { intent: 'behavioral', confidence: 0.9, answerShape: INTENT_ANSWER_SHAPES.behavioral };
     }
 

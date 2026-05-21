@@ -2809,6 +2809,8 @@ Provide only the answer, nothing else.`;
                                                     if (m === 'llama-3.3-70b-versatile') return 'Groq Llama 3.3';
                                                     if (m === 'gpt-5.4') return 'GPT 5.4';
                                                     if (m === 'claude-sonnet-4-6') return 'Sonnet 4.6';
+                                                    if (m.startsWith('meta/llama-')) return 'NVIDIA Llama';
+                                                    if (m.startsWith('nvidia/')) return 'NVIDIA ' + m.split('/')[1];
                                                     return m;
                                                 })()}
                                             </span>

@@ -56,6 +56,9 @@ export interface StoredCredentials {
     groqPreferredModel?: string;
     openaiPreferredModel?: string;
     claudePreferredModel?: string;
+    nvidiaPreferredModel?: string;
+    // NVIDIA NIM
+    nvidiaApiKey?: string;
     // Free trial state
     trialToken?: string;   // server-issued signed token (natively_trial_…)
     trialExpiresAt?: string;   // ISO timestamp — local copy for startup check
@@ -190,6 +193,10 @@ export class CredentialsManager {
 
     public getNativelyApiKey(): string | undefined {
         return this.credentials.nativelyApiKey;
+    }
+
+    public getNvidiaApiKey(): string | undefined {
+        return this.credentials.nvidiaApiKey || process.env.NVIDIA_API_KEY;
     }
 
     public getAllCredentials(): StoredCredentials {
@@ -367,6 +374,12 @@ export class CredentialsManager {
 
         this.saveCredentials();
         console.log('[CredentialsManager] Natively API Key updated');
+    }
+
+    public setNvidiaApiKey(key: string): void {
+        this.credentials.nvidiaApiKey = key.trim() || undefined;
+        this.saveCredentials();
+        console.log('[CredentialsManager] NVIDIA API Key updated');
     }
 
     public getPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude'): string | undefined {

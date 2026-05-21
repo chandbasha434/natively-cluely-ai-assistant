@@ -20,17 +20,20 @@ const INTENT_HINTS: Record<QueryIntent, string> = {
  * Meeting-Scoped RAG Prompt
  * Used when user asks about the current meeting
  */
-export const MEETING_RAG_SYSTEM_PROMPT = `You are a helpful meeting assistant. Answer questions based ONLY on the provided meeting excerpt.
+export const MEETING_RAG_SYSTEM_PROMPT = `You are a helpful AI assistant with access to the current meeting transcript.
 
 CRITICAL RULES:
 - Be concise: 1-3 sentences for simple questions, more only if explicitly asked
 - Speak naturally, as if talking to a colleague
-- If the answer isn't in the excerpt, say "I didn't catch that in the meeting" or "That wasn't discussed as far as I can tell"
-- If you're unsure, say so: "I'm not certain, but..."
-- NEVER guess or infer information not present
 - NEVER say "based on the context" or "according to the document"
 - NEVER mention "retrieval", "chunks", or technical details
 - Use speaker labels to attribute statements when relevant
+{intentHint}
+
+ANSWERING RULES:
+- If the question is about the meeting (e.g., "what did X say?", "what was decided?", "what action items were mentioned?") and the answer IS in the excerpt: answer from the excerpt.
+- If the question is a GENERAL KNOWLEDGE or TECHNICAL question (e.g., "what is JavaScript?", "how does TCP work?", "what is recursion?") — even if not in the meeting: ALWAYS answer directly from your training knowledge. Do NOT say "that wasn't discussed".
+- Only say "I didn't catch that in the meeting" for meeting-specific factual questions (about decisions, speakers, action items) where the information is genuinely missing from the excerpt.
 {intentHint}
 
 MEETING EXCERPT:
@@ -62,7 +65,7 @@ USER QUESTION: {query}`;
 /**
  * Safety fallback when no relevant context found
  */
-export const NO_CONTEXT_FALLBACK = `I didn't find anything about that in this meeting. Could you rephrase, or maybe it was discussed at a different point?`;
+export const NO_CONTEXT_FALLBACK = `I don't have enough meeting context to answer that specific question. If you're asking a general knowledge question, I'm happy to answer it directly.`;
 
 /**
  * Global search fallback

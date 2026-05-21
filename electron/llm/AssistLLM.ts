@@ -25,14 +25,15 @@ export class AssistLLM {
             }
 
             // Centralized LLM logic
-            // providing a specific instruction as message, using UNIVERSAL_ASSIST_PROMPT as system prompt
-            const instruction = "Briefly summarize what is happening right now in 1-2 sentences. Do not give advice, just observation.";
+            // Providing a specific instruction to be a proactive knowledge assistant
+            const instruction = "Provide 1-3 highly relevant facts, definitions, or bullet points to help the candidate answer the current topic. Focus on technical concepts (APIs, SQL, Networking) or behavioral frameworks (STAR, de-escalation). Be extremely concise. Do NOT suggest what to say verbatim.";
 
             return await this.llmHelper.chat(
                 instruction,
                 undefined, // no image
                 context,
-                UNIVERSAL_ASSIST_PROMPT
+                UNIVERSAL_ASSIST_PROMPT,
+                "llama-3.1-8b-instant" // Force fast model for passive assist
             );
 
         } catch (error) {

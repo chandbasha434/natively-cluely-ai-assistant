@@ -11,7 +11,7 @@
     "build:electron:tsc": "tsc -p electron/tsconfig.json",
     "typecheck:electron": "tsc -p electron/tsconfig.json --noEmit",
     "preview": "vite preview",
-    "postinstall": "cross-env SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm rebuild sharp && electron-rebuild -f -w better-sqlite3 -w keytar && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js && node scripts/patch-electron-plist.js",
+    "postinstall": "cross-env SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm rebuild sharp && electron-rebuild -f -w better-sqlite3,keytar && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js && node scripts/patch-electron-plist.js",
     "electron:dev": "npm run build:electron && cross-env NODE_ENV=development electron .",
     "electron:build": "npm run build:electron && cross-env NODE_ENV=production electron .",
     "app:dev": "concurrently \"npm run dev -- --port 5180 --strictPort\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
@@ -19,7 +19,8 @@
     "watch": "tsc -p electron/tsconfig.json --watch",
     "start": "npm run app:dev",
     "dist": "npm run app:build",
-    "build:native": "node scripts/build-native.js"
+    "build:native": "node scripts/build-native.js",
+    "test:api": "node scripts/test-apis.js"
   },
   "build": {
     "generateUpdatesFilesForAllChannels": true,
@@ -163,7 +164,7 @@
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
     "dotenv": "^17.3.1",
-    "electron": "^33.2.0",
+    "electron": "^33.4.11",
     "electron-builder": "^26.8.1",
     "electron-is-dev": "^3.0.1",
     "electron-rebuild": "^3.2.9",

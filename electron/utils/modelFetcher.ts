@@ -10,7 +10,7 @@ export interface ProviderModel {
     label: string;
 }
 
-type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
+type Provider = 'gemini' | 'groq' | 'openai' | 'claude' | 'nvidia';
 
 /**
  * Fetch available models from a provider's API.
@@ -29,9 +29,33 @@ export async function fetchProviderModels(
             return fetchAnthropicModels(apiKey);
         case 'gemini':
             return fetchGeminiModels(apiKey);
+        case 'nvidia':
+            return fetchNvidiaModels(apiKey);
         default:
             throw new Error(`Unknown provider: ${provider}`);
     }
+}
+
+// ─── NVIDIA ──────────────────────────────────────────────────────────────────
+
+async function fetchNvidiaModels(apiKey: string): Promise<ProviderModel[]> {
+    const response = await axios.get('https://integrate.api.nvidia.com/v1/models', {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        timeout: 15000,
+    });
+
+    const models: any[] = response.data?.data || [];
+
+    // Filter for chat/text/vision models — exclude embeddings etc.
+    const excludePatterns = ['embed', 'rerank', 'qa', 'similarity'];
+    const filtered = models.filter((m: any) => {
+        const id = (m.id || '').toLowerCase();
+        return !excludePatterns.some(p => id.includes(p));
+    });
+
+    return filtered
+        .map((m: any) => ({ id: m.id, label: m.id }))
+        .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 // ─── OpenAI ──────────────────────────────────────────────────────────────────

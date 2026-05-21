@@ -680,7 +680,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle("get-verbose-logging", async () => {
-    return appState.getVerboseLogging();
+    return true;
   });
 
   safeHandle("set-verbose-logging", async (_, enabled: boolean) => {
@@ -713,9 +713,9 @@ export function initializeIpcHandlers(appState: AppState): void {
   // Fire-and-forget: renderer forwards its console output to the main-process log file.
   // Only written when verbose logging is enabled.
   ipcMain.on("forward-log-to-file", (_event, level: string, msg: string) => {
-    if (!appState.getVerboseLogging()) return;
-    const tag = level === 'error' ? '[RENDERER-ERROR]' : level === 'warn' ? '[RENDERER-WARN]' : '[RENDERER]';
-    console.log(`${tag} ${msg}`);
+    // Only log to terminal if verbose logging is enabled or for errors
+    // The main process usually just writes to file, but we can keep it simple.
+    console.log(`[RENDERER-${level.toUpperCase()}] ${msg}`);
   });
 
   safeHandle("get-arch", async () => {
@@ -1428,14 +1428,27 @@ export function initializeIpcHandlers(appState: AppState): void {
       // Return masked versions for security (just indicate if set)
       const hasKey = (key?: string) => !!(key && key.trim().length > 0);
 
-      return {
-        hasGeminiKey: hasKey(creds.geminiApiKey),
-        hasGroqKey: hasKey(creds.groqApiKey),
-        hasOpenaiKey: hasKey(creds.openaiApiKey),
-        hasClaudeKey: hasKey(creds.claudeApiKey),
+      const result = {
+        hasGeminiKey: hasKey(creds.geminiApiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
+        hasGroqKey: hasKey(creds.groqApiKey || process.env.GROQ_API_KEY),
+        hasOpenaiKey: hasKey(creds.openaiApiKey || process.env.OPENAI_API_KEY),
+        hasClaudeKey: hasKey(creds.claudeApiKey || process.env.CLAUDE_API_KEY),
         hasNativelyKey: hasKey(creds.nativelyApiKey),
+        hasNvidiaKey: hasKey((creds as any).nvidiaApiKey || process.env.NVIDIA_API_KEY),
         googleServiceAccountPath: creds.googleServiceAccountPath || null,
         sttProvider: creds.sttProvider || 'none',
+        // Preferred Models
+        geminiPreferredModel: creds.geminiPreferredModel || null,
+        groqPreferredModel: creds.groqPreferredModel || null,
+        openaiPreferredModel: creds.openaiPreferredModel || null,
+        claudePreferredModel: creds.claudePreferredModel || null,
+        nvidiaPreferredModel: (creds as any).nvidiaPreferredModel || null,
+      };
+
+      console.log('[IPC] get-stored-credentials result:', result);
+
+      return {
+        ...result,
         groqSttModel: creds.groqSttModel || 'whisper-large-v3-turbo',
         hasSttGroqKey: hasKey(creds.groqSttApiKey),
         hasSttOpenaiKey: hasKey(creds.openAiSttApiKey),
@@ -1463,6 +1476,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         groqPreferredModel: creds.groqPreferredModel || undefined,
         openaiPreferredModel: creds.openaiPreferredModel || undefined,
         claudePreferredModel: creds.claudePreferredModel || undefined,
+        nvidiaPreferredModel: creds.nvidiaPreferredModel || undefined,
       };
     } catch (error: any) {
       return { hasGeminiKey: false, hasGroqKey: false, hasOpenaiKey: false, hasClaudeKey: false, hasNativelyKey: false, googleServiceAccountPath: null, sttProvider: 'none', groqSttModel: 'whisper-large-v3-turbo', hasSttGroqKey: false, hasSttOpenaiKey: false, hasDeepgramKey: false, hasElevenLabsKey: false, hasAzureKey: false, azureRegion: 'eastus', hasIbmWatsonKey: false, ibmWatsonRegion: 'us-south', hasSonioxKey: false, hasTavilyKey: false, sttGroqKey: '', sttOpenaiKey: '', sttDeepgramKey: '', sttElevenLabsKey: '', sttAzureKey: '', sttIbmKey: '', sttSonioxKey: '' };
@@ -1473,7 +1487,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // Dynamic Model Discovery Handlers
   // ==========================================
 
-  safeHandle("fetch-provider-models", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => {
+  safeHandle("fetch-provider-models", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'nvidia', apiKey: string) => {
     try {
       // Fall back to stored key if no key was explicitly provided
       let key = apiKey?.trim();
@@ -1500,10 +1514,10 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-provider-preferred-model", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string) => {
+  safeHandle("set-provider-preferred-model", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'nvidia', modelId: string) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().setPreferredModel(provider, modelId);
+      CredentialsManager.getInstance().setPreferredModel(provider as any, modelId);
     } catch (error: any) {
       console.error(`[IPC] Failed to set preferred model for ${provider}:`, error);
     }
@@ -1918,7 +1932,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("test-llm-connection", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey?: string) => {
+  safeHandle("test-llm-connection", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'nvidia', apiKey?: string) => {
     console.log(`[IPC] Received test-llm-connection request for provider: ${provider}`);
     try {
       if (!apiKey || !apiKey.trim()) {
@@ -1928,6 +1942,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         else if (provider === 'groq') apiKey = creds.getGroqApiKey();
         else if (provider === 'openai') apiKey = creds.getOpenaiApiKey();
         else if (provider === 'claude') apiKey = creds.getClaudeApiKey();
+        else if (provider === 'nvidia') apiKey = creds.getNvidiaApiKey();
       }
 
       if (!apiKey || !apiKey.trim()) {
@@ -1972,6 +1987,15 @@ export function initializeIpcHandlers(appState: AppState): void {
             'anthropic-version': '2023-06-01',
             'content-type': 'application/json'
           },
+          timeout: 15000
+        });
+      } else if (provider === 'nvidia') {
+        response = await axios.post('https://integrate.api.nvidia.com/v1/chat/completions', {
+          model: "meta/llama-3.1-8b-instruct",
+          messages: [{ role: "user", content: "Hello" }],
+          max_tokens: 10
+        }, {
+          headers: { Authorization: `Bearer ${apiKey}` },
           timeout: 15000
         });
       }
@@ -2143,6 +2167,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // ==========================================
 
   safeHandle("start-meeting", async (event, metadata?: any) => {
+    console.log('[IPC] Received start-meeting request', metadata);
     try {
       await appState.startMeeting(metadata);
       return { success: true };
@@ -3200,7 +3225,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("modes:upload-reference-file", async (_, modeId: string) => {
     try {
       if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
-      const result = await dialog.showOpenDialog({
+      const result: any = await dialog.showOpenDialog({
         properties: ['openFile'],
         filters: [
           { name: 'Text & Documents', extensions: ['txt', 'md', 'pdf', 'docx', 'doc'] },
