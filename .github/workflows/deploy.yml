@@ -36,7 +36,9 @@ jobs:
         run: npm run build:electron
 
       - name: Build Rust Native Module (Universal macOS)
-        run: cross-env NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native
+        env:
+          NATIVELY_BUILD_ALL_MAC_ARCHES: 1
+        run: npm run build:native
 
       - name: Fetch macOS sharp Dependencies
         run: node scripts/ensure-sharp-mac-deps.js
