@@ -38,6 +38,8 @@ jobs:
         env:
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
           VITE_GROQ_API_KEY: ${{ secrets.VITE_GROQ_API_KEY }}
+          VITE_OPENAI_API_KEY: ${{ secrets.VITE_OPENAI_API_KEY }}
+          VITE_CLAUDE_API_KEY: ${{ secrets.VITE_CLAUDE_API_KEY }}
           VITE_NVIDIA_API_KEY: ${{ secrets.VITE_NVIDIA_API_KEY }}
           VITE_DEFAULT_MODEL: ${{ secrets.VITE_DEFAULT_MODEL }}
 

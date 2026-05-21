@@ -37,14 +37,22 @@ if (typeof window !== "undefined" && !window.electronAPI) {
   };
 
   // ── Real Gemini streaming via fetch + SSE ─────────────────────────
+  // Helper to resolve the provider name based on the active model ID
+  const getProviderForModel = (model: string): string => {
+    const lower = model.toLowerCase();
+    if (lower.startsWith('gpt-')) return 'openai';
+    if (lower.startsWith('claude-')) return 'claude';
+    if (lower.startsWith('meta/') || lower.startsWith('nvidia/')) return 'nvidia';
+    if (lower.startsWith('llama-') || lower.startsWith('mixtral-')) return 'groq';
+    return 'gemini';
+  };
+
+  // ── Real Gemini streaming via fetch + SSE ─────────────────────────
   const streamGeminiReal = async (question: string, systemPrompt?: string) => {
     // Priority: user's own key (localStorage) → baked-in build key (GitHub Secret)
     const apiKey = LS.get('natively_gemini_key') || (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
-    // Fall back to Groq if no Gemini key
     if (!apiKey) {
-      const groqKey = LS.get('natively_groq_key') || (import.meta.env.VITE_GROQ_API_KEY as string) || '';
-      if (groqKey) { await streamGroqReal(question, groqKey, systemPrompt); return; }
-      const msg = '⚠️ No API key configured. Go to **Settings → AI Providers** and add your Gemini or Groq API key.';
+      const msg = '⚠️ No Gemini API key configured. Go to **Settings → AI Providers** and add your Gemini API key.';
       const tokens = msg.split(/(\s+)/);
       let i = 0;
       const iv = setInterval(() => {
@@ -92,8 +100,8 @@ if (typeof window !== "undefined" && !window.electronAPI) {
   };
 
   // ── Real Groq streaming via fetch + SSE ──────────────────────────
-  const streamGroqReal = async (question: string, apiKey: string, systemPrompt?: string) => {
-    const model = 'llama-3.3-70b-versatile';
+  const streamGroqReal = async (question: string, apiKey: string, systemPrompt?: string, model?: string) => {
+    const activeModel = model || 'llama-3.3-70b-versatile';
     const messages: any[] = [];
     if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
     messages.push({ role: 'user', content: question });
@@ -101,12 +109,131 @@ if (typeof window !== "undefined" && !window.electronAPI) {
       const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: JSON.stringify({ model, messages, stream: true }),
+        body: JSON.stringify({ model: activeModel, messages, stream: true }),
       });
       if (!resp.ok) {
         let errText = '';
         try { errText = await resp.text(); } catch {}
         emit('onGeminiStreamError', `Groq API Error ${resp.status}: ${errText}`);
+        return;
+      }
+      await readSSEStream(resp, (line) => {
+        if (!line.startsWith('data: ')) return null;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr || jsonStr === '[DONE]') return null;
+        try {
+          const chunk = JSON.parse(jsonStr);
+          return chunk?.choices?.[0]?.delta?.content || null;
+        } catch { return null; }
+      });
+    } catch (err: any) {
+      emit('onGeminiStreamError', `Network error: ${err?.message || err}`);
+    }
+  };
+
+  // ── Real OpenAI streaming via fetch + SSE ────────────────────────
+  const streamOpenaiReal = async (question: string, apiKey: string, systemPrompt?: string, model?: string) => {
+    const activeModel = model === 'gpt-5.4' ? 'gpt-4o' : (model || 'gpt-4o');
+    const messages: any[] = [];
+    if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+    messages.push({ role: 'user', content: question });
+    try {
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: activeModel, messages, stream: true }),
+      });
+      if (!resp.ok) {
+        let errText = '';
+        try { errText = await resp.text(); } catch {}
+        emit('onGeminiStreamError', `OpenAI API Error ${resp.status}: ${errText}`);
+        return;
+      }
+      await readSSEStream(resp, (line) => {
+        if (!line.startsWith('data: ')) return null;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr || jsonStr === '[DONE]') return null;
+        try {
+          const chunk = JSON.parse(jsonStr);
+          return chunk?.choices?.[0]?.delta?.content || null;
+        } catch { return null; }
+      });
+    } catch (err: any) {
+      emit('onGeminiStreamError', `Network error: ${err?.message || err}. Note: Direct browser requests to OpenAI might be blocked by CORS outside Electron unless you use a browser CORS extension.`);
+    }
+  };
+
+  // ── Real Claude/Anthropic streaming via fetch + SSE ──────────────
+  const streamClaudeReal = async (question: string, apiKey: string, systemPrompt?: string, model?: string) => {
+    const activeModel = model === 'claude-sonnet-4-6' ? 'claude-3-5-sonnet-latest' : (model || 'claude-3-5-sonnet-latest');
+    const messages = [{ role: 'user', content: question }];
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'dangerously-allow-html-in-templates': 'true'
+        },
+        body: JSON.stringify({
+          model: activeModel,
+          messages,
+          system: systemPrompt,
+          max_tokens: 4096,
+          stream: true
+        }),
+      });
+      if (!resp.ok) {
+        let errText = '';
+        try { errText = await resp.text(); } catch {}
+        emit('onGeminiStreamError', `Claude API Error ${resp.status}: ${errText}`);
+        return;
+      }
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6).trim();
+            if (!jsonStr) continue;
+            try {
+              const chunk = JSON.parse(jsonStr);
+              if (chunk.type === 'content_block_delta' && chunk.delta?.text) {
+                emit('onGeminiStreamToken', chunk.delta.text);
+              }
+            } catch {}
+          }
+        }
+      }
+      emit('onGeminiStreamDone');
+    } catch (err: any) {
+      emit('onGeminiStreamError', `Network error: ${err?.message || err}. Note: Direct browser requests to Claude might be blocked by CORS outside Electron unless you use a browser CORS extension.`);
+    }
+  };
+
+  // ── Real NVIDIA streaming via fetch + SSE ─────────────────────────
+  const streamNvidiaReal = async (question: string, apiKey: string, systemPrompt?: string, model?: string) => {
+    const activeModel = model || 'meta/llama-3.1-8b-instruct';
+    const messages: any[] = [];
+    if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+    messages.push({ role: 'user', content: question });
+    try {
+      const resp = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: activeModel, messages, stream: true }),
+      });
+      if (!resp.ok) {
+        let errText = '';
+        try { errText = await resp.text(); } catch {}
+        emit('onGeminiStreamError', `NVIDIA API Error ${resp.status}: ${errText}`);
         return;
       }
       await readSSEStream(resp, (line) => {
@@ -145,13 +272,13 @@ if (typeof window !== "undefined" && !window.electronAPI) {
             hasNativelyKey:   false,
             hasGeminiKey:     !!(LS.get('natively_gemini_key') || import.meta.env.VITE_GEMINI_API_KEY),
             hasGroqKey:       !!(LS.get('natively_groq_key')   || import.meta.env.VITE_GROQ_API_KEY),
-            hasOpenaiKey:     !!LS.get('natively_openai_key'),
-            hasClaudeKey:     !!LS.get('natively_claude_key'),
-            hasNvidiaKey:     !!(import.meta.env.VITE_NVIDIA_API_KEY),
+            hasOpenaiKey:     !!(LS.get('natively_openai_key') || import.meta.env.VITE_OPENAI_API_KEY),
+            hasClaudeKey:     !!(LS.get('natively_claude_key') || import.meta.env.VITE_CLAUDE_API_KEY),
+            hasNvidiaKey:     !!(LS.get('natively_nvidia_key') || import.meta.env.VITE_NVIDIA_API_KEY),
             googleServiceAccountPath: null,
             sttProvider:      "none",
             hasSttGroqKey:    !!(LS.get('natively_groq_key') || import.meta.env.VITE_GROQ_API_KEY),
-            hasSttOpenaiKey:  false,
+            hasSttOpenaiKey:  !!(LS.get('natively_openai_key') || import.meta.env.VITE_OPENAI_API_KEY),
             hasDeepgramKey:   false,
             hasElevenLabsKey: false,
             hasAzureKey:      false,
@@ -185,7 +312,10 @@ if (typeof window !== "undefined" && !window.electronAPI) {
           };
         }
         if (prop === "setNvidiaApiKey") {
-          return () => Promise.resolve({ success: true });
+          return (key: string) => {
+            key ? LS.set('natively_nvidia_key', key) : LS.del('natively_nvidia_key');
+            return Promise.resolve({ success: true });
+          };
         }
 
         // ── Test LLM connection ───────────────────────────────────
@@ -209,7 +339,27 @@ if (typeof window !== "undefined" && !window.electronAPI) {
         // ── Real streaming chat ───────────────────────────────────
         if (prop === "streamGeminiChat") {
           return (question: string, _imagePaths?: string[], systemPrompt?: string) => {
-            streamGeminiReal(question, systemPrompt);
+            const envDefault = (import.meta.env.VITE_DEFAULT_MODEL as string) || 'gemini-2.5-flash';
+            const model = LS.get('natively_current_model') || envDefault;
+            const provider = getProviderForModel(model);
+
+            if (provider === 'gemini') {
+              streamGeminiReal(question, systemPrompt);
+            } else if (provider === 'groq') {
+              const groqKey = LS.get('natively_groq_key') || (import.meta.env.VITE_GROQ_API_KEY as string) || '';
+              streamGroqReal(question, groqKey, systemPrompt, model);
+            } else if (provider === 'openai') {
+              const openaiKey = LS.get('natively_openai_key') || (import.meta.env.VITE_OPENAI_API_KEY as string) || '';
+              streamOpenaiReal(question, openaiKey, systemPrompt, model);
+            } else if (provider === 'claude') {
+              const claudeKey = LS.get('natively_claude_key') || (import.meta.env.VITE_CLAUDE_API_KEY as string) || '';
+              streamClaudeReal(question, claudeKey, systemPrompt, model);
+            } else if (provider === 'nvidia') {
+              const nvidiaKey = LS.get('natively_nvidia_key') || (import.meta.env.VITE_NVIDIA_API_KEY as string) || '';
+              streamNvidiaReal(question, nvidiaKey, systemPrompt, model);
+            } else {
+              streamGeminiReal(question, systemPrompt);
+            }
             return Promise.resolve({ success: true });
           };
         }
@@ -226,7 +376,7 @@ if (typeof window !== "undefined" && !window.electronAPI) {
           return () => {
             const envDefault = (import.meta.env.VITE_DEFAULT_MODEL as string) || 'gemini-2.5-flash';
             const m = LS.get('natively_current_model') || envDefault;
-            const provider = m.startsWith('gemini') ? 'gemini' : m.startsWith('llama') || m.startsWith('mixtral') ? 'groq' : 'gemini';
+            const provider = getProviderForModel(m);
             return Promise.resolve({ provider, model: m, isOllama: false });
           };
         }
